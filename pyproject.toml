@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chirotopes"
+version = "0.1.0"
+description = "SAT-based chirotope enumeration tool"
+authors = [
+    {name = "Manfred Scheucher"},
+    {name = "Jelena Glišić"},
+    {name = "Todor Antić"},
+]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = [
+    "python-sat>=1.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+chirotopes = "chirotopes.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+chirotopes = ["data/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

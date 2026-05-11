@@ -1,0 +1,195 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage[margin=2.5cm]{geometry}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\comb}[2]{\binom{#1}{#2}}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{remark}{Remark}
+
+\title{SAT-Based Chirotope Enumeration\\[0.3em]
+\large Documentation and Mathematical Background}
+\author{Manfred Scheucher \and Jelena Gli\v{s}i\'{c} \and Todor Anti\'{c}}
+\date{2024}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document describes the mathematical background and SAT encoding used in the \texttt{chirotopes} package for enumerating chirotopes (oriented matroids) via satisfiability solving.
+We explain the Grassmann--Pl\"ucker relations, the allowed-pattern encoding, and the various modes (mutations, symmetry breaking, coloring, extension).
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+
+A \emph{chirotope} of rank~$r$ on~$n$ elements encodes the orientation of every ordered $r$-tuple of a set $E = \{0, \ldots, n-1\}$. Chirotopes are equivalent to oriented matroids and capture the combinatorial structure of point configurations, hyperplane arrangements, and convex polytopes.
+
+This package provides a SAT-based approach to enumerate all chirotopes satisfying given constraints (acyclicity, mutation properties, colorability, etc.) by encoding the Grassmann--Pl\"ucker relations as a propositional formula.
+
+\section{Mathematical Background}
+
+\subsection{Chirotopes}
+
+\begin{definition}
+A \emph{chirotope} of rank~$r$ on a ground set $E = \{0,\ldots,n-1\}$ is a mapping
+\[
+  \chi : E^r \to \{-1, 0, +1\}
+\]
+satisfying:
+\begin{enumerate}
+\item \textbf{Non-degeneracy:} $\chi$ is not identically zero.
+\item \textbf{Alternating:} $\chi(e_{\sigma(1)}, \ldots, e_{\sigma(r)}) = \sgn(\sigma) \cdot \chi(e_1, \ldots, e_r)$ for every permutation~$\sigma$.
+\item \textbf{Grassmann--Pl\"ucker relations:} For all $x_1, x_2, a_1, \ldots, a_{r-2} \in E$ and $y_1, y_2 \in E$, if
+\[
+  \chi(y_1, a_1, \ldots, a_{r-2}) \cdot \chi(x_1, y_2, a_1, \ldots, a_{r-2}) \geq 0
+\]
+\[
+  \chi(y_2, a_1, \ldots, a_{r-2}) \cdot \chi(y_1, x_1, a_1, \ldots, a_{r-2}) \geq 0
+\]
+then
+\[
+  \chi(a_1, \ldots, a_{r-2}) \cdot \chi(x_1, x_2, a_1, \ldots, a_{r-2}) \geq 0.
+\]
+\end{enumerate}
+\end{definition}
+
+In the non-degenerate case (all values $\pm 1$), these are the \emph{3-term Grassmann--Pl\"ucker relations}.
+
+\begin{theorem}[OM Bible, Theorem 3.6.2~\cite{BLSWZ1999}]
+A non-degenerate alternating map $\chi : E^r \to \{-1, +1\}$ is a chirotope if and only if the 3-term Grassmann--Pl\"ucker relations hold for all choices of $x_1, x_2, y_1, y_2, a_1, \ldots, a_{r-2}$.
+\end{theorem}
+
+\subsection{Acyclicity}
+
+An oriented matroid is \emph{acyclic} if it contains no positive circuit, equivalently, it corresponds to a realizable point configuration where no point lies in the convex hull of the others in a degenerate way.
+
+In the encoding, acyclicity is enforced by forbidding the ``antipodal of a point in a simplex'': for every $(r{+}1)$-tuple $X$ and sign $s \in \{+1,-1\}$:
+\[
+  \sum_{i=0}^{r} s \cdot (-1)^i \cdot \chi(X \setminus \{x_i\}) \neq 0.
+\]
+
+\subsection{Mutations}
+
+A \emph{mutation} of a chirotope is an $r$-subset $I$ such that flipping $\chi(I)$ (and extending by alternation) yields another valid chirotope. The mutation graph captures adjacency between chirotopes.
+
+\section{SAT Encoding}
+
+\subsection{Variables}
+
+For each sorted $r$-subset $I \subseteq E$, we introduce a Boolean variable $v_I$ representing $\chi(I) = +1$ (true) or $\chi(I) = -1$ (false). Unsorted tuples are handled implicitly via the permutation sign.
+
+\subsection{Allowed-Pattern Encoding}
+
+For each $(r{+}2)$-subset $J \subseteq E$, we consider all $\comb{r+2}{r}$ sorted $r$-subsets of~$J$. The local sign pattern must be one of the \emph{allowed patterns}---those satisfying all 3-term GP relations within~$J$.
+
+\begin{remark}
+For rank~3, there are exactly 384 allowed patterns (each of length $\comb{5}{3} = 10$). For rank~4, there are 3584 allowed patterns (each of length $\comb{6}{4} = 15$).
+\end{remark}
+
+For each $J$ and each allowed pattern~$t$, we introduce a Boolean variable $a_{J,t}$ and encode:
+\begin{itemize}
+\item Exactly one pattern is active: $\bigvee_t a_{J,t}$.
+\item Pattern-sign consistency: $a_{J,t} \Rightarrow (v_I = t_i)$ for each position~$i$.
+\end{itemize}
+
+\subsection{On the Encoding Choice}
+
+All encoding modes (\texttt{grassmannpluecker}, \texttt{allowedpatterns}, \texttt{both}) use the allowed-pattern mechanism described above.  The modes differ only in whether flippability variables are created (needed for mutation/coloring analysis).
+
+\begin{remark}[Exchange axiom is insufficient for rank~$\geq 4$]
+The basis exchange axiom~(B2$'$) from~\cite{BLSWZ1999} is sometimes used to generate the allowed patterns.  For rank~3, (B2$'$) correctly produces 384~patterns.  However, for rank~4, (B2$'$) generates 3840~patterns, of which only 3584 are valid chirotope patterns.  The 256~extra patterns satisfy (B2$'$) but violate the full Grassmann--Pl\"ucker relations.
+
+Using the exchange axiom alone as SAT clauses (without allowed patterns) yields 9080~solutions for rank~4, $n=7$, instead of the correct~5800.  The allowed-pattern encoding correctly handles all ranks because the precomputed pattern files encode the complete set of valid local configurations.
+\end{remark}
+
+\subsection{Flippability (Mutations)}
+
+For each $r$-subset $I$ and each $(r{+}2)$-superset $J \supseteq I$, we introduce a variable $g_{I,J}$ indicating that $I$ is flippable within~$J$ (i.e., $J$'s pattern allows flipping position~$I$). The global flippability $f_I$ is the conjunction:
+\[
+  f_I \Leftrightarrow \bigwedge_{J \supseteq I} g_{I,J}.
+\]
+
+\subsection{Symmetry Breaking}
+
+With \texttt{--symmetry}, we fix elements $0, \ldots, r{-}3$ on the convex hull boundary and sort the remaining elements:
+\[
+  \chi(0, \ldots, r{-}3, i, j) = +1 \quad \text{for all } r{-}2 \leq i < j \leq n{-}1.
+\]
+This eliminates relabeling symmetries but not reorientations ($\chi \mapsto -\chi$).
+
+\subsection{BVA Optimization}
+
+Bounded Variable Addition (BVA) reduces clause counts by introducing auxiliary variables for pairs of consecutive sign positions. Instead of encoding each pattern position individually, pairs of positions $(i, i{+}1)$ are encoded jointly.
+
+\section{Modes}
+
+\subsection{Mutation Constraints}
+
+\begin{itemize}
+\item \texttt{--nomutations}: $\neg f_I$ for all~$I$ (no mutations exist).
+\item \texttt{--isolatedone}: $\neg f_I$ for all $I \ni 1$.
+\item \texttt{--isolatedonetwo}: $\neg f_I$ for all $I \ni 1$ or $I \ni 2$.
+\end{itemize}
+
+\subsection{Coloring}
+
+\begin{itemize}
+\item \texttt{--colorwithonered}: Each element is red or blue. At least one red, one blue. Each mutation must be monochromatic (all elements same color).
+\item \texttt{--colorwithtwored}: Same but at least two red and two blue (uses cardinality constraints).
+\end{itemize}
+
+\subsection{Extension Mode}
+
+With \texttt{--extendable FILE}, reads chirotopes on $n{-}1$ elements and tries to extend each to~$n$ elements, checking which pairs of new $r$-subsets can be made simultaneously flippable.
+
+\subsection{Signotopes}
+
+With \texttt{--signotope}, the packet size is $r{+}1$ instead of $r{+}2$, and allowed patterns have a different structure (at most one sign change between consecutive positions).
+
+\section{Known Counts}
+
+Acyclic, non-degenerate chirotopes with \texttt{--symmetry} (up to relabeling, including reorientations):
+
+\begin{center}
+\begin{tabular}{c|ccccccc}
+\multicolumn{8}{l}{\textbf{Rank 3}} \\
+$n$ & 3 & 4 & 5 & 6 & 7 & 8 \\
+\hline
+count & 1 & 2 & 8 & 62 & 908 & --- \\[0.5em]
+\multicolumn{8}{l}{\textbf{Rank 4}} \\
+$n$ & 4 & 5 & 6 & 7 \\
+\hline
+count & 1 & 4 & 80 & 5800
+\end{tabular}
+\end{center}
+
+The rank-3 sequence $1, 2, 8, 62, 908$ equals twice OEIS \href{https://oeis.org/A006245}{A006245} $(1, 1, 4, 31, 454, \ldots)$, which counts acyclic rank-3 uniform oriented matroids up to relabeling \emph{and} reorientation.
+
+The Finschi--Fukuda database~\cite{FinschiF2001} lists 11~isomorphism classes of uniform rank-4 oriented matroids on 7~elements (up to relabeling and reorientation).
+
+\section{Future Work}
+
+\begin{itemize}
+\item Lean/Dafny formal verification of chirotope properties.
+\item Characterize the 3584~valid rank-4 patterns axiomatically (the exchange axiom alone is insufficient; see Remark above).
+\item Integration with DRAT proof logging for certified enumeration.
+\item Full isomorphism reduction (relabeling + reorientation) for comparison with Finschi--Fukuda counts.
+\end{itemize}
+
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}
