@@ -7,6 +7,7 @@ from itertools import combinations
 
 from .encoding import ChirotopeEncoder
 from .solver import solve, solve_extension, write_solutions
+from .cnf_utils import read_cnf, unit_propagate, verify_proof, cnf_to_inccnf
 
 
 def _log(*args):
@@ -14,50 +15,140 @@ def _log(*args):
     print(f"[{datetime.now()}]", *args)
 
 
+def cmd_propagate(args):
+    """Run unit propagation on a CNF file."""
+    cnf = read_cnf(args.file)
+    n_before = len(cnf)
+    result = unit_propagate(cnf)
+    if result is None:
+        print(f"CONFLICT detected during unit propagation.")
+        print(f"Clauses before: {n_before}")
+        sys.exit(1)
+    n_after = len(result)
+    print(f"Clauses before: {n_before}")
+    print(f"Clauses after:  {n_after}")
+    print(f"Removed:        {n_before - n_after}")
+    if args.output:
+        max_var = max(abs(l) for c in result for l in c) if result else 0
+        with open(args.output, "w") as f:
+            f.write(f"p cnf {max_var} {len(result)}\n")
+            for c in result:
+                f.write(" ".join(str(l) for l in c) + " 0\n")
+        print(f"Written to: {args.output}")
+
+
+def cmd_verify_proof(args):
+    """Merge CNF + DRAT proof into INCCNF for verification."""
+    stats = verify_proof(
+        args.cnf, args.proof, args.output,
+        var_file=args.vars,
+        shuffle=args.shuffle,
+        debug=args.debug,
+    )
+    print(f"Written INCCNF to: {args.output}")
+    print(f"Clause length distribution: {dict(sorted(stats.items()))}")
+
+
+def cmd_cubify(args):
+    """Convert CNF + cubes into INCCNF for Cube-and-Conquer."""
+    stats = cnf_to_inccnf(args.cnf, args.cubes, args.output)
+    print(f"Written INCCNF to: {args.output}")
+    print(f"Cube length distribution: {dict(sorted(stats.items()))}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="SAT-based chirotope enumeration tool"
     )
-    parser.add_argument("rank", type=int, help="rank of the chirotope")
-    parser.add_argument("n", type=int, help="number of elements")
-    parser.add_argument("-o", "--instance2file", type=str,
-                        help="write CNF instance to file")
-    parser.add_argument("-e", "--extendable", type=str,
-                        help="chirotope file for extension")
-    parser.add_argument("--solve", action='store_true',
-                        help="solve the instance")
-    parser.add_argument("--nomutations", action='store_true',
-                        help="no mutations allowed")
-    parser.add_argument("--isolatedone", action='store_true',
-                        help="no mutations at element 1")
-    parser.add_argument("--isolatedonetwo", action='store_true',
-                        help="no mutations at elements 1 or 2")
-    parser.add_argument("--colorwithonered", action='store_true',
-                        help="2-colored mutations, at least 1 red")
-    parser.add_argument("--colorwithtwored", action='store_true',
-                        help="2-colored mutations, at least 2 red")
-    parser.add_argument("--symmetry", action='store_true',
-                        help="enable symmetry breaking")
-    parser.add_argument("--encoding",
-                        choices=["allowedpatterns", "grassmannpluecker", "both"],
-                        default="grassmannpluecker",
-                        help="encoding: allowedpatterns (may be incomplete for "
-                             "rank >= 4), grassmannpluecker, or both (default)")
-    parser.add_argument("--bva", action='store_true',
-                        help="enable Bounded Variable Addition optimization")
-    parser.add_argument("--allowcyclic", action='store_true',
-                        help="allow cyclic chirotopes (default: acyclic only)")
-    parser.add_argument("--test", action='store_true',
-                        help="use hardcoded test mutation sets")
-    parser.add_argument("-a", "--all", action='store_true',
-                        help="enumerate all solutions")
-    parser.add_argument("--enumerate", action='store_true',
-                        help="print solutions during solving")
-    parser.add_argument("--signotope", action='store_true',
-                        help="solve for signotopes instead of chirotopes")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # --- propagate subcommand ---
+    sp_prop = subparsers.add_parser(
+        "propagate", help="run unit propagation on a CNF file"
+    )
+    sp_prop.add_argument("file", help="input CNF file (DIMACS format)")
+    sp_prop.add_argument("-o", "--output", help="write simplified CNF to file")
+    sp_prop.set_defaults(func=cmd_propagate)
+
+    # --- verify-proof subcommand ---
+    sp_verify = subparsers.add_parser(
+        "verify-proof",
+        help="merge CNF + DRAT proof into INCCNF for verification",
+    )
+    sp_verify.add_argument("cnf", help="input CNF file")
+    sp_verify.add_argument("proof", help="DRAT proof file")
+    sp_verify.add_argument("output", help="output INCCNF file")
+    sp_verify.add_argument("--vars", help="variable mapping file")
+    sp_verify.add_argument("--shuffle", action="store_true",
+                           help="shuffle proof clauses")
+    sp_verify.add_argument("--debug", type=int, default=0,
+                           help="debug level (0, 1, or 2)")
+    sp_verify.set_defaults(func=cmd_verify_proof)
+
+    # --- cubify subcommand ---
+    sp_cube = subparsers.add_parser(
+        "cubify",
+        help="convert CNF + cubes into INCCNF for Cube-and-Conquer",
+    )
+    sp_cube.add_argument("cnf", help="input CNF file")
+    sp_cube.add_argument("cubes", help="cubes file")
+    sp_cube.add_argument("output", help="output INCCNF file")
+    sp_cube.set_defaults(func=cmd_cubify)
+
+    # --- enumerate subcommand (original main functionality) ---
+    sp_enum = subparsers.add_parser(
+        "enumerate", help="enumerate chirotopes via SAT solving"
+    )
+    sp_enum.add_argument("rank", type=int, help="rank of the chirotope")
+    sp_enum.add_argument("n", type=int, help="number of elements")
+    sp_enum.add_argument("-o", "--instance2file", type=str,
+                         help="write CNF instance to file")
+    sp_enum.add_argument("-e", "--extendable", type=str,
+                         help="chirotope file for extension")
+    sp_enum.add_argument("--solve", action='store_true',
+                         help="solve the instance")
+    sp_enum.add_argument("--nomutations", action='store_true',
+                         help="no mutations allowed")
+    sp_enum.add_argument("--isolatedone", action='store_true',
+                         help="no mutations at element 1")
+    sp_enum.add_argument("--isolatedonetwo", action='store_true',
+                         help="no mutations at elements 1 or 2")
+    sp_enum.add_argument("--colorwithonered", action='store_true',
+                         help="2-colored mutations, at least 1 red")
+    sp_enum.add_argument("--colorwithtwored", action='store_true',
+                         help="2-colored mutations, at least 2 red")
+    sp_enum.add_argument("--symmetry", action='store_true',
+                         help="enable symmetry breaking")
+    sp_enum.add_argument("--encoding",
+                         choices=["allowedpatterns", "grassmannpluecker", "both"],
+                         default="grassmannpluecker",
+                         help="encoding: allowedpatterns (may be incomplete for "
+                              "rank >= 4), grassmannpluecker, or both (default)")
+    sp_enum.add_argument("--bva", action='store_true',
+                         help="enable Bounded Variable Addition optimization")
+    sp_enum.add_argument("--allowcyclic", action='store_true',
+                         help="allow cyclic chirotopes (default: acyclic only)")
+    sp_enum.add_argument("--test", action='store_true',
+                         help="use hardcoded test mutation sets")
+    sp_enum.add_argument("-a", "--all", action='store_true',
+                         help="enumerate all solutions")
+    sp_enum.add_argument("--enumerate", action='store_true',
+                         help="print solutions during solving")
+    sp_enum.add_argument("--signotope", action='store_true',
+                         help="solve for signotopes instead of chirotopes")
 
     args = parser.parse_args(argv)
 
+    if args.command is None:
+        parser.print_help()
+        sys.exit(1)
+
+    # Dispatch to subcommand handlers
+    if args.command in ("propagate", "verify-proof", "cubify"):
+        args.func(args)
+        return
+
+    # --- enumerate subcommand ---
     if not args.instance2file and not args.solve:
         print("Error: specify --solve or -o/--instance2file", file=sys.stderr)
         sys.exit(1)

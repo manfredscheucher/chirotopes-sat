@@ -7,6 +7,7 @@
 \usepackage{algpseudocode}
 \usepackage{listings}
 \usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\Z}{\mathbb{Z}}
@@ -17,6 +18,13 @@
 \newtheorem{definition}{Definition}
 \newtheorem{theorem}{Theorem}
 \newtheorem{remark}{Remark}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+}
 
 \title{SAT-Based Chirotope Enumeration\\[0.3em]
 \large Documentation and Mathematical Background}
@@ -29,6 +37,7 @@
 \begin{abstract}
 This document describes the mathematical background and SAT encoding used in the \texttt{chirotopes} package for enumerating chirotopes (oriented matroids) via satisfiability solving.
 We explain the Grassmann--Pl\"ucker relations, the allowed-pattern encoding, and the various modes (mutations, symmetry breaking, coloring, extension).
+Additionally, we cover installation, usage, post-processing tools for proof verification and Cube-and-Conquer solving, and the package structure.
 \end{abstract}
 
 \tableofcontents
@@ -37,7 +46,47 @@ We explain the Grassmann--Pl\"ucker relations, the allowed-pattern encoding, and
 
 A \emph{chirotope} of rank~$r$ on~$n$ elements encodes the orientation of every ordered $r$-tuple of a set $E = \{0, \ldots, n-1\}$. Chirotopes are equivalent to oriented matroids and capture the combinatorial structure of point configurations, hyperplane arrangements, and convex polytopes.
 
-This package provides a SAT-based approach to enumerate all chirotopes satisfying given constraints (acyclicity, mutation properties, colorability, etc.) by encoding the Grassmann--Pl\"ucker relations as a propositional formula.
+This package provides a SAT-based approach to enumerate all chirotopes satisfying given constraints (acyclicity, mutation properties, colorability, etc.) by encoding the Grassmann--Pl\"ucker relations as a propositional formula. The approach was used for the results in~\cite{EmptyHexagon} and related projects on combinatorial geometry.
+
+The tool supports several encoding modes, symmetry breaking, mutation analysis, coloring constraints, and extension from smaller instances. For large instances beyond the reach of internal solving, the package integrates with external SAT solvers through CNF export, unit propagation, proof verification, and Cube-and-Conquer splitting.
+
+\section{Installation and Usage}
+
+\subsection{Installation}
+
+The package requires Python~3.10+ and the PySAT library~\cite{IMM2021}. Install in a virtual environment:
+
+\begin{lstlisting}
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+\end{lstlisting}
+
+\subsection{Basic Usage}
+
+The main entry point is the \texttt{enumerate} subcommand:
+
+\begin{lstlisting}
+# Generate CNF for rank 3, n=6 and write to file:
+python -m chirotopes enumerate 3 6 -o instance.cnf
+
+# Solve directly, enumerating all solutions:
+python -m chirotopes enumerate 3 6 --solve --all --symmetry
+
+# Signotope mode:
+python -m chirotopes enumerate 3 7 --solve --signotope --symmetry
+\end{lstlisting}
+
+\subsection{Typical Workflow}
+
+A typical workflow for larger instances proceeds in several phases:
+\begin{enumerate}
+\item \textbf{Generate CNF:} Create the SAT instance with \texttt{enumerate rank n -o instance.cnf}.
+\item \textbf{Simplify:} Run unit propagation via \texttt{propagate instance.cnf -o simplified.cnf}.
+\item \textbf{Solve externally:} Feed the CNF to a high-performance solver such as CaDiCaL~\cite{Biere2019} with DRAT proof logging.
+\item \textbf{Verify proofs:} Use \texttt{verify-proof} to merge the CNF and DRAT proof into an INCCNF file for independent verification.
+\item \textbf{Cube-and-Conquer:} For hard instances, split the search space into cubes and solve in parallel using the \texttt{cubify} subcommand.
+\end{enumerate}
 
 \section{Mathematical Background}
 
@@ -85,6 +134,12 @@ In the encoding, acyclicity is enforced by forbidding the ``antipodal of a point
 
 A \emph{mutation} of a chirotope is an $r$-subset $I$ such that flipping $\chi(I)$ (and extending by alternation) yields another valid chirotope. The mutation graph captures adjacency between chirotopes.
 
+More precisely, $I$ is a mutation of~$\chi$ if for every $(r{+}2)$-superset $J \supseteq I$, the local sign pattern of~$\chi$ restricted to~$J$ remains an allowed pattern after flipping the sign at position~$I$. The mutation graph has chirotopes as vertices and edges between chirotopes that differ by exactly one mutation. Studying connectivity and diameter of this graph is an active area of research.
+
+\begin{remark}
+For rank~3, $n=5$ with \texttt{--symmetry}, there are 8~chirotopes. With \texttt{--nomutations}, only chirotopes without any mutations are counted. With \texttt{--isolatedone}, element~1 is required to not participate in any mutation.
+\end{remark}
+
 \section{SAT Encoding}
 
 \subsection{Variables}
@@ -105,7 +160,42 @@ For each $J$ and each allowed pattern~$t$, we introduce a Boolean variable $a_{J
 \item Pattern-sign consistency: $a_{J,t} \Rightarrow (v_I = t_i)$ for each position~$i$.
 \end{itemize}
 
+\subsection{Concrete Example: Rank~3, $n=5$}
+
+Consider rank $r=3$ on $E=\{0,1,2,3,4\}$. There are $\binom{5}{3}=10$ chirotope variables:
+\[
+v_{012},\; v_{013},\; v_{014},\; v_{023},\; v_{024},\; v_{034},\; v_{123},\; v_{124},\; v_{134},\; v_{234}.
+\]
+There is exactly one $(r{+}2)$-subset, namely $J = \{0,1,2,3,4\}$ itself. It induces a pattern of length~10 over its $r$-subsets. The encoding creates one pattern variable $a_{J,t}$ per allowed pattern ($384$ pattern variables) plus the 10 chirotope variables, totaling $394$ variables. For each pattern~$t$, the implication $a_{J,t} \Rightarrow (v_I = t_i)$ is encoded as a 2-literal clause. Together with the at-least-one constraint $\bigvee_t a_{J,t}$, this yields $384 \times 10 + 1 = 3841$ clauses before acyclicity constraints.
+
+For $n=6$ (rank~3), there are $\binom{6}{3}=20$ chirotope variables and $\binom{6}{5}=6$ pattern groups, each with 384~pattern variables, giving $20 + 6 \times 384 = 2324$ variables before flippability.
+
+With \texttt{--symmetry}, the variables $v_{01i}$ for $i=2,3,4$ are fixed to true (positive), reducing the search space. Patterns inconsistent with these fixed values are eliminated during encoding, which can substantially reduce both variable and clause counts.
+
+\subsection{Variable and Clause Counts}
+
+Table~\ref{tab:counts} shows the number of variables and clauses for common parameter choices using the \texttt{grassmannpluecker} encoding with \texttt{--symmetry}:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ccrr}
+\toprule
+Rank & $n$ & Variables & Clauses \\
+\midrule
+3 & 5 &  394 &     2\,316 \\
+3 & 6 &  3\,860 &   26\,360 \\
+3 & 7 &  20\,811 &  157\,171 \\
+3 & 8 &  80\,052 &  654\,580 \\
+4 & 6 &  5\,414 &   43\,184 \\
+4 & 7 &  61\,285 &  568\,855 \\
+\bottomrule
+\end{tabular}
+\caption{Variable and clause counts for common $(r,n)$ parameters.}
+\label{tab:counts}
+\end{table}
+
 \subsection{On the Encoding Choice}
+\label{sec:encoding-choice}
 
 All encoding modes (\texttt{grassmannpluecker}, \texttt{allowedpatterns}, \texttt{both}) use the allowed-pattern mechanism described above.  The modes differ only in whether flippability variables are created (needed for mutation/coloring analysis).
 
@@ -132,7 +222,14 @@ This eliminates relabeling symmetries but not reorientations ($\chi \mapsto -\ch
 
 \subsection{BVA Optimization}
 
-Bounded Variable Addition (BVA) reduces clause counts by introducing auxiliary variables for pairs of consecutive sign positions. Instead of encoding each pattern position individually, pairs of positions $(i, i{+}1)$ are encoded jointly.
+Bounded Variable Addition (BVA)~\cite{SchSch2024} reduces clause counts by introducing auxiliary variables for pairs of consecutive sign positions. Instead of encoding each pattern position individually, pairs of positions $(i, i{+}1)$ are encoded jointly via a 2-bit auxiliary variable that encodes the four possible sign combinations $(+\!+, +\!-, -\!+, -\!-)$ at those two positions. This transforms $O(p)$ binary clauses per pattern into $O(p/2)$ clauses with the auxiliary variables, which can significantly reduce the total clause count for large instances.
+
+The trade-off is a modest increase in the number of variables: for each $(r{+}2)$-subset and each pair of consecutive positions, an auxiliary variable is introduced. In practice, the clause reduction outweighs the variable overhead, especially for rank~4 and higher where the pattern length ($\binom{r+2}{r}$) is large.
+
+To enable BVA, pass \texttt{--bva} on the command line:
+\begin{lstlisting}
+python -m chirotopes enumerate 4 7 -o instance.cnf --symmetry --bva
+\end{lstlisting}
 
 \section{Modes}
 
@@ -146,18 +243,111 @@ Bounded Variable Addition (BVA) reduces clause counts by introducing auxiliary v
 
 \subsection{Coloring}
 
+The coloring modes introduce Boolean color variables $c_i$ for each element $i \in E$ (true = red, false = blue) and constrain that every mutation is monochromatic:
 \begin{itemize}
-\item \texttt{--colorwithonered}: Each element is red or blue. At least one red, one blue. Each mutation must be monochromatic (all elements same color).
-\item \texttt{--colorwithtwored}: Same but at least two red and two blue (uses cardinality constraints).
+\item \texttt{--colorwithonered}: Each element is red or blue. At least one element is red and at least one is blue. Each mutation $I$ must be monochromatic: either all elements of~$I$ are red or all are blue. Formally, for each mutation~$I$: $f_I \Rightarrow \bigl(\bigwedge_{i \in I} c_i \lor \bigwedge_{i \in I} \neg c_i\bigr)$.
+\item \texttt{--colorwithtwored}: Same as above, but requires at least two red and at least two blue elements. The cardinality constraints (at-least-2) are encoded using auxiliary variables.
 \end{itemize}
+
+These modes are used to study the \emph{chromatic number} of mutation graphs: if a coloring exists, the chirotope's mutation set can be partitioned by color.
 
 \subsection{Extension Mode}
 
-With \texttt{--extendable FILE}, reads chirotopes on $n{-}1$ elements and tries to extend each to~$n$ elements, checking which pairs of new $r$-subsets can be made simultaneously flippable.
+With \texttt{--extendable FILE}, the tool reads chirotopes on $n{-}1$ elements from the given file and attempts to extend each to~$n$ elements. For each input chirotope, the values on the original $\binom{n-1}{r}$ subsets are fixed, and the solver determines valid assignments for the $\binom{n-1}{r-1}$ new $r$-subsets containing the new element~$n{-}1$. This mode is used to check which pairs of new $r$-subsets can be made simultaneously flippable.
 
-\subsection{Signotopes}
+The input file format is one chirotope per line, encoded as a string of \texttt{+} and \texttt{-} characters over the $\binom{n-1}{r}$ sorted $r$-subsets. Example usage:
+\begin{lstlisting}
+# Extend rank-3 chirotopes from n=6 to n=7:
+python -m chirotopes enumerate 3 7 --solve --extendable sols_3_6.txt \
+    --all --enumerate
+\end{lstlisting}
 
-With \texttt{--signotope}, the packet size is $r{+}1$ instead of $r{+}2$, and allowed patterns have a different structure (at most one sign change between consecutive positions).
+\subsection{Signotope Mode}
+
+With \texttt{--signotope}, the encoding switches to \emph{signotopes}: the packet size becomes $r{+}1$ (instead of $r{+}2$), and the allowed patterns enforce at most one sign change between consecutive positions in each packet. Concretely, for rank~$r$ on $n$~elements, each $(r{+}1)$-subset $J$ gives a sign vector of length $\binom{r+1}{r} = r+1$, and the constraint is that this vector has at most one sign change when the $r$-subsets of~$J$ are listed in lexicographic order. Signotopes arise naturally as allowable sequences and are a relaxation of chirotopes; they have applications in the study of pseudoline arrangements and related combinatorial structures.
+
+\begin{remark}
+Signotopes are strictly more general than chirotopes: every chirotope is a signotope, but not every signotope is a chirotope. For rank~3, $n=5$, there are 8~chirotopes (with symmetry) but more signotopes.
+\end{remark}
+
+\section{Post-Processing Tools}
+\label{sec:postprocessing}
+
+For large instances, internal solving via PySAT may be too slow. The package therefore supports exporting CNF files for external solvers and provides tools to work with their output. The three post-processing subcommands replace the standalone scripts that were previously in the \texttt{satify/} directory and are now integrated into the package.
+
+\subsection{Unit Propagation}
+
+The \texttt{propagate} subcommand simplifies a CNF formula by iteratively applying unit propagation: if a clause contains a single literal, that literal must be true, and all clauses containing it can be removed while the negated literal is removed from all other clauses.
+
+\begin{lstlisting}
+python -m chirotopes propagate instance.cnf -o simplified.cnf
+\end{lstlisting}
+
+This is useful as a preprocessing step before feeding the CNF to an external solver, as it can substantially reduce the formula size. The algorithm iterates until no more unit clauses remain or a conflict (empty clause) is detected, in which case the formula is unsatisfiable.
+
+\subsection{Proof Verification}
+
+The \texttt{verify-proof} subcommand merges a CNF file with a DRAT (Deletion Resolution Asymmetric Tautology) proof into an \emph{incremental CNF} (INCCNF) file. For each binary learned clause in the proof, an assumption line is created so that an incremental SAT solver such as CaDiCaL~\cite{Biere2019} can verify that each clause is indeed implied by the original formula.
+
+\begin{lstlisting}
+python -m chirotopes verify-proof instance.cnf proof.drat output.inccnf
+python -m chirotopes verify-proof instance.cnf proof.drat output.inccnf \
+    --vars instance.cnf.vars --debug 1
+\end{lstlisting}
+
+The optional \texttt{--vars} flag loads a variable-name mapping for human-readable debug output.
+
+\subsection{Cube-and-Conquer}
+
+The Cube-and-Conquer paradigm~\cite{HeuleKM2012} splits a hard SAT instance into many smaller subproblems (cubes) that can be solved independently in parallel. The approach has two phases:
+\begin{enumerate}
+\item \textbf{Cubing phase:} A lookahead solver (e.g., \texttt{march\_cu}) partitions the search space into cubes---conjunctions of literals that together cover all solutions.
+\item \textbf{Conquering phase:} Each cube is solved independently by a CDCL solver (e.g., CaDiCaL~\cite{Biere2019}), enabling embarrassingly parallel execution on a cluster.
+\end{enumerate}
+
+The \texttt{cubify} subcommand converts a CNF file and a cubes file (produced in the cubing phase) into an INCCNF file where each cube becomes an assumption line:
+
+\begin{lstlisting}
+# Generate cubes with march_cu:
+march_cu instance.cnf -o cubes.icnf
+
+# Convert to INCCNF for parallel solving:
+python -m chirotopes cubify instance.cnf cubes.icnf output.inccnf
+
+# Solve with CaDiCaL:
+cadical --inccnf output.inccnf
+\end{lstlisting}
+
+\subsection{The INCCNF Format}
+
+The incremental CNF (INCCNF) format extends DIMACS CNF with assumption lines. The header is \texttt{p inccnf} (no variable/clause counts). Regular clauses are written as usual; assumption lines start with \texttt{a} and specify literals that the solver should assume to be true for the next solve call. This format is supported by incremental solvers like CaDiCaL.
+
+An example INCCNF file:
+\begin{lstlisting}
+p inccnf
+1 2 0
+-1 3 0
+a -2 -3 0
+\end{lstlisting}
+Here, the first two lines are regular clauses. The line \texttt{a -2 -3 0} instructs the solver to assume $\neg x_2$ and $\neg x_3$ and solve under those assumptions. Multiple assumption lines encode multiple independent solve calls.
+
+\section{Package Structure}
+\label{sec:structure}
+
+The package is organized as follows:
+
+\begin{description}
+\item[\texttt{src/chirotopes/core.py}] Core combinatorial functions: subset enumeration, sign computation, and alternating-map operations.
+\item[\texttt{src/chirotopes/encoding.py}] The \texttt{ChirotopeEncoder} class that builds the SAT encoding: variables, allowed patterns, GP constraints, symmetry breaking, mutation/coloring constraints.
+\item[\texttt{src/chirotopes/solver.py}] Interface to PySAT solvers: solving, enumeration, extension mode, and solution output.
+\item[\texttt{src/chirotopes/cli.py}] Command-line interface with subcommands: \texttt{enumerate}, \texttt{propagate}, \texttt{verify-proof}, \texttt{cubify}.
+\item[\texttt{src/chirotopes/cnf\_utils.py}] CNF file I/O, unit propagation, proof merging, and cube-to-INCCNF conversion.
+\item[\texttt{src/chirotopes/data/}] Precomputed allowed-pattern files: \texttt{allowed\_patterns3.txt} (384~patterns of length~10) and \texttt{allowed\_patterns4.txt} (3584~patterns of length~15).
+\item[\texttt{tests/}] Test suite (pytest) covering encoding correctness, known counts, symmetry, and edge cases.
+\item[\texttt{old/}] Legacy code and solution files preserved for reference. Includes the original monolithic \texttt{chirotopes.py} and previous standalone SAT utility scripts (\texttt{satify/}).
+\end{description}
+
+The allowed-pattern data files are loaded automatically by the \texttt{ChirotopeEncoder} at initialization time. The files contain one pattern per line, encoded as a string of \texttt{+} and \texttt{-} characters (e.g., \texttt{+++++-{}-{}-{}-{}-} for a 10-position rank-3 pattern). The rank-4 pattern file (\texttt{allowed\_patterns4.txt}) was provided by Jelena Gli\v{s}i\'{c} and encodes the complete set of 3584~valid local configurations satisfying the full Grassmann--Pl\"ucker relations.
 
 \section{Known Counts}
 
@@ -183,10 +373,11 @@ The Finschi--Fukuda database~\cite{FinschiF2001} lists 11~isomorphism classes of
 \section{Future Work}
 
 \begin{itemize}
-\item Lean/Dafny formal verification of chirotope properties.
-\item Characterize the 3584~valid rank-4 patterns axiomatically (the exchange axiom alone is insufficient; see Remark above).
-\item Integration with DRAT proof logging for certified enumeration.
-\item Full isomorphism reduction (relabeling + reorientation) for comparison with Finschi--Fukuda counts.
+\item \textbf{Formal verification:} Lean/Dafny proofs of chirotope properties and encoding correctness.
+\item \textbf{Rank-4 axiomatics:} Characterize the 3584~valid rank-4 patterns axiomatically. The exchange axiom alone is insufficient (see Remark in Section~\ref{sec:encoding-choice}); a complete axiomatization avoiding explicit pattern enumeration would simplify the encoding.
+\item \textbf{Certified enumeration:} Full integration with DRAT proof logging so that every enumeration result can be independently verified.
+\item \textbf{Isomorphism reduction:} Full isomorphism reduction (relabeling + reorientation) for direct comparison with Finschi--Fukuda counts~\cite{FinschiF2001}.
+\item \textbf{Parallelization:} Systematic Cube-and-Conquer~\cite{HeuleKM2012} pipeline for attacking larger instances (e.g., rank~3, $n=9$ or rank~4, $n=8$).
 \end{itemize}
 
 \bibliographystyle{plain}
